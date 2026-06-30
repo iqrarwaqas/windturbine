@@ -1,0 +1,30 @@
+How to run it
+
+# Full study — all 6 strategies, 3 seeds (reproduces the results table + figures)
+python main.py
+
+# Fast end-to-end smoke test
+python main.py --quick
+
+# Just the single-farm sanity gate
+python main.py --gate --farm A
+
+# Focused comparison
+python main.py --strategies naive replay_distill --seeds 0 1 2
+
+# Force CPU if you want
+python main.py --device cpu
+The header comment in main.py documents every flag and every output file.
+
+Where results are saved
+All under care_cl/results/:
+
+records.csv — one row per (strategy, bandit, seed, stage, farm) with all CARE sub-scores
+metrics.csv — per-run final_avg_care, forgetting, BWT
+metrics_aggregated.csv — mean ± std across seeds
+fig_forgetting_curves.png, fig_final_per_farm_care.png, fig_bandit_ablation.png
+run_*.json — full per-run stage×farm matrix
+cache/farm_*.npz — standardized tensors (first run builds them ~150s; reruns are fast)
+One note from the quick run above: with only --quick --seeds 0, replay_distill still shows 
+lower Farm-A forgetting than naive (+0.018 vs +0.025), but the gap is small and noisy 
+at one seed — the full python main.py (3 seeds, full epochs) is what gives the stable headline numbers.
