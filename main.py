@@ -132,37 +132,99 @@ def main():
         with open(args.config, "w") as f:
             yaml.safe_dump(tmp, f)
 
-    print(f"\n[run] strategies={args.strategies} bandits={args.bandits} "
-          f"seeds={args.seeds} align={args.align_modes} quick={args.quick}")
-    records_df, metrics_df = run_grid(
-        args.config, args.strategies, args.bandits, args.seeds,
-        args.align_modes, quick=args.quick,
-    )
+    # Each align mode is saved to its OWN subfolder (results/<mode>/) so running
+    # both modes never overwrites the other's results. The data cache is shared.
+    per_mode_metrics = []
+    for mode in args.align_modes:
+        out_dir = os.path.join(results_dir, mode)
+        os.makedirs(out_dir, exist_ok=True)
+        print(f"\n[run] mode={mode} strategies={args.strategies} "
+              f"bandits={args.bandits} seeds={args.seeds} quick={args.quick}")
+        records_df, metrics_df = run_grid(
+            args.config, args.strategies, args.bandits, args.seeds,
+            [mode], quick=args.quick,
+        )
+        _save_mode_outputs(records_df, metrics_df, out_dir, mode)
+        per_mode_metrics.append((mode, metrics_df))
 
-    # --- 3. Save tables ----------------------------------------------------
-    records_path = os.path.join(results_dir, "records.csv")
-    metrics_path = os.path.join(results_dir, "metrics.csv")
-    agg_path = os.path.join(results_dir, "metrics_aggregated.csv")
+    # --- Cross-mode comparison --------------------------------------------
+    # Reads every results/<mode>/metrics.csv on disk, so modes run in separate
+    # sessions still get compared (not just the modes from this invocation).
+    _write_comparison(results_dir)
+    print("Done.")
+
+
+def _save_mode_outputs(records_df, metrics_df, out_dir, mode):
+    """Save tables, figures and the markdown summary for one align mode."""
+    os.makedirs(out_dir, exist_ok=True)
+    records_path = os.path.join(out_dir, "records.csv")
+    metrics_path = os.path.join(out_dir, "metrics.csv")
+    agg_path = os.path.join(out_dir, "metrics_aggregated.csv")
     records_df.to_csv(records_path, index=False)
     metrics_df.to_csv(metrics_path, index=False)
     aggregate(metrics_df).to_csv(agg_path, index=False)
 
-    # --- 4. Print the headline table + save figures ------------------------
-    print("\n=== final_avg_care (mean over seeds) ===")
+    print(f"\n=== [{mode}] final_avg_care (mean over seeds) ===")
     print(metrics_df.groupby(["strategy", "bandit"])["final_avg_care"]
           .mean().unstack().to_string(float_format=lambda x: f"{x:.3f}"))
-    print("\n=== mean forgetting on Farm A (lower = better; naive should be worst) ===")
+    print(f"=== [{mode}] mean forgetting on Farm A (lower = better) ===")
     print(metrics_df.groupby("strategy")["forgetting_A"]
           .mean().to_string(float_format=lambda x: f"{x:+.4f}"))
 
     try:
-        make_all_plots(records_df, metrics_df, results_dir)
-        print(f"\nfigures written to {results_dir}")
+        make_all_plots(records_df, metrics_df, out_dir)
     except Exception as e:
         print(f"(plots skipped: {e})")
+    try:
+        from care_cl.experiments.summary import build_markdown
+        bandit = "off" if "off" in set(records_df["bandit"]) else records_df["bandit"].iloc[0]
+        with open(os.path.join(out_dir, "results_summary.md"), "w", encoding="utf-8") as f:
+            f.write(build_markdown(records_df, metrics_df, bandit))
+    except Exception as e:
+        print(f"(summary skipped: {e})")
+    print(f"[{mode}] wrote tables + figures + results_summary.md to {out_dir}/")
 
-    print(f"\nwrote:\n  {records_path}\n  {metrics_path}\n  {agg_path}")
-    print("Done.")
+
+def _write_comparison(results_dir):
+    """Write a side-by-side comparison from every results/<mode>/metrics.csv on disk."""
+    frames = []
+    for mode in ("shared_only", "adapter"):
+        mp = os.path.join(results_dir, mode, "metrics.csv")
+        if not os.path.exists(mp):
+            continue
+        m = pd.read_csv(mp)
+        g = m.groupby("strategy").agg(
+            final_avg_care=("final_avg_care", "mean"),
+            forgetting_A=("forgetting_A", "mean")).reset_index()
+        g.insert(0, "align_mode", mode)
+        frames.append(g)
+    if len(frames) < 2:
+        return  # need at least two modes to compare
+    comp = pd.concat(frames, ignore_index=True)
+    comp_csv = os.path.join(results_dir, "comparison_modes.csv")
+    comp.to_csv(comp_csv, index=False)
+
+    # Markdown: one block per metric, modes as columns (no tabulate dependency).
+    def _table(piv):
+        modes = list(piv.columns)
+        head = "| strategy | " + " | ".join(modes) + " |"
+        sep = "| " + " | ".join("---" for _ in range(len(modes) + 1)) + " |"
+        body = []
+        for strat, row in piv.iterrows():
+            cells = [f"{row[m]:.4f}" if pd.notna(row[m]) else "—" for m in modes]
+            body.append(f"| {strat} | " + " | ".join(cells) + " |")
+        return "\n".join([head, sep] + body)
+
+    lines = ["# Align-mode comparison (shared_only vs adapter)", "",
+             "Mean over seeds. Higher CARE = better; lower forgetting = better.", ""]
+    for metric, better in [("final_avg_care", "higher better"),
+                           ("forgetting_A", "lower better")]:
+        piv = comp.pivot(index="strategy", columns="align_mode", values=metric)
+        lines += [f"## {metric} ({better})", "", _table(piv), ""]
+    comp_md = os.path.join(results_dir, "comparison_modes.md")
+    with open(comp_md, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    print(f"\nwrote cross-mode comparison:\n  {comp_csv}\n  {comp_md}")
 
 
 if __name__ == "__main__":

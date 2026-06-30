@@ -1,0 +1,92 @@
+==============================================================================
+ CARE Continual-Learning Benchmark  —  COMMANDS
+ Run everything from the repo root:  d:\Repo\windturbine
+ Shell: Git Bash (or any terminal). GPU (CUDA) is used automatically.
+==============================================================================
+
+------------------------------------------------------------------------------
+ 0) ONE-TIME SETUP
+------------------------------------------------------------------------------
+# Install dependencies
+pip install -r care_cl/requirements.txt
+
+# (Dataset must already be at D:/Datasets/Care/ with "Wind Farm A/B/C" folders.)
+
+
+------------------------------------------------------------------------------
+ 1) SANITY CHECK (fast, ~30s)  — confirms the harness works
+------------------------------------------------------------------------------
+# Single-farm CARE acceptance gate (should land ~0.6-0.7)
+python main.py --gate --farm A
+
+
+------------------------------------------------------------------------------
+ 2) THE MAIN RUNS  — results save per mode in results/<mode>/
+------------------------------------------------------------------------------
+# A) shared_only mode (6 shared signals) — the clean CL story
+python main.py --align-modes shared_only
+
+# B) adapter mode (full per-farm features) — heavier, higher absolute CARE
+#    First run rebuilds caches; Farm C is slow/large. Be patient.
+python main.py --align-modes adapter
+
+# C) BOTH modes in one go (recommended) — also writes the comparison file
+python main.py --align-modes shared_only adapter
+
+
+------------------------------------------------------------------------------
+ 3) FASTER / SMALLER VARIANTS (optional)
+------------------------------------------------------------------------------
+# Quick pass (fewer epochs / capped rows) just to see it run end-to-end
+python main.py --quick --align-modes shared_only adapter
+
+# Only a couple of strategies / seeds
+python main.py --align-modes adapter --strategies naive replay_distill --seeds 0 1 2
+
+# Force CPU (if GPU is busy/unavailable)
+python main.py --align-modes shared_only --device cpu
+
+
+------------------------------------------------------------------------------
+ 4) REPORT-READY SUMMARY (re-generate tables + figures without retraining)
+------------------------------------------------------------------------------
+# Summary for shared_only results
+python -m care_cl.experiments.summary --results-dir care_cl/results/shared_only
+
+# Summary for adapter results
+python -m care_cl.experiments.summary --results-dir care_cl/results/adapter
+
+
+------------------------------------------------------------------------------
+ 5) TESTS (verify the code, no training)
+------------------------------------------------------------------------------
+python -m pytest care_cl/tests -q
+
+
+------------------------------------------------------------------------------
+ 6) OPTIONAL CLEANUP
+------------------------------------------------------------------------------
+# Delete the old orphaned 5-signal caches (frees ~57 MB; safe)
+rm care_cl/results/cache/farm_*_shared_only.npz care_cl/results/cache/farm_*_shared_only.npz.meta.npy
+
+# Wipe ALL caches to force a clean rebuild (next run will be slow)
+rm -rf care_cl/results/cache
+
+
+==============================================================================
+ WHERE RESULTS GO
+==============================================================================
+ care_cl/results/shared_only/      <- shared_only run outputs
+ care_cl/results/adapter/          <- adapter run outputs
+     records.csv                       per (strategy,bandit,seed,stage,farm) + sub-scores
+     metrics.csv                       per (strategy,bandit,seed): final_avg, forgetting, BWT
+     metrics_aggregated.csv            mean +/- std across seeds
+     results_summary.md                report-ready tables + findings + figure links
+     fig_forgetting_curves.png         CARE on Farm A/B vs stage, per strategy
+     fig_final_per_farm_care.png       final per-farm CARE bars
+
+ care_cl/results/comparison_modes.md   shared_only vs adapter side-by-side
+ care_cl/results/comparison_modes.csv  (written once BOTH modes have been run)
+
+ care_cl/results/cache/                standardized data tensors (reused across runs)
+==============================================================================

@@ -1,0 +1,9 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Large data caches (standardized tensors); keep small sample results/figures.
+care_cl/results/cache/
+care_cl/results/**/cache/
+*_config_override.yaml
