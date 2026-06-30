@@ -1,0 +1,54 @@
+# Default configuration for the CARE continual-learning benchmark.
+# Every hyperparameter, seed, and path lives here so one command reproduces a run.
+
+seed: 0
+
+data:
+  # Absolute root of the CARE-to-Compare download (contains "Wind Farm A/B/C").
+  root: "D:/Datasets/Care"
+  sep: ";"
+  # Status IDs considered normal operation (README: 0=Normal, 2=Idling).
+  normal_status_ids: [0, 2]
+
+align:
+  mode: "shared_only"        # "shared_only" (default) | "adapter"
+  # Canonical cross-farm signals; per-farm column mapping lives in data/align.py.
+  shared_signals: ["active_power", "wind_speed", "reactive_power", "rotor_speed", "ambient_temp"]
+  window_len: 1              # single timestep by default
+
+model:
+  type: "ae"                 # "ae" | "transformer" (transformer is an optional ablation)
+  latent_dim: 16
+  hidden_dims: [64, 32]      # encoder; decoder is symmetric
+  dropout: 0.0
+
+train:
+  epochs: 15
+  batch_size: 512
+  lr: 0.001
+  weight_decay: 0.0
+  device: "cuda"             # "cuda" | "auto" | "cpu"  (auto/cuda fall back to CPU if no GPU)
+  max_train_rows_per_farm: 200000   # subsample cap to keep runs fast; null = no cap
+
+cl:
+  sequence: ["A", "B", "C"]
+  strategy: "naive"          # naive|joint|ewc|replay|distill|replay_distill
+  lambda_ewc: 100.0
+  lambda_distill: 1.0
+  buffer_per_farm: 2000
+  replay_batch_frac: 0.5     # fraction of each batch drawn from replay buffer
+
+threshold:
+  bandit: "off"              # "off" (fixed quantile) | "on"
+  fixed_quantile: 0.95       # used when bandit == off (5% FPR on normal training data)
+  candidate_quantiles: [0.90, 0.95, 0.97, 0.99, 0.995, 0.999]
+  bandit_algo: "epsilon_greedy"   # "epsilon_greedy" | "linucb"
+  epsilon: 0.1
+
+eval:
+  beta: 0.5                  # F-beta for coverage/reliability (precision-weighted)
+  criticality_threshold: 72  # 12h of consecutive 10-min anomalies for event detection
+  weights: {coverage: 1.0, earliness: 1.0, reliability: 1.0, accuracy: 2.0}
+
+paths:
+  results_dir: "care_cl/results"
