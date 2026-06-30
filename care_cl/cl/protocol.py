@@ -8,6 +8,7 @@ discard the heavy frames. Caches are persisted to results/cache/*.npz for fast r
 from __future__ import annotations
 
 import glob
+import hashlib
 import os
 from dataclasses import dataclass
 
@@ -61,7 +62,11 @@ def _cache_path(cfg: dict, farm_id: str) -> str:
     mode = cfg["align"]["mode"]
     d = os.path.join(cfg["paths"]["results_dir"], "cache")
     os.makedirs(d, exist_ok=True)
-    return os.path.join(d, f"farm_{farm_id}_{mode}.npz")
+    # Tag the cache with the shared-signal set so changing SHARED_SIGNALS (or mode)
+    # automatically invalidates stale caches instead of silently reusing them.
+    sig = "full" if mode == "adapter" else "_".join(SHARED_SIGNALS)
+    key = hashlib.md5(sig.encode()).hexdigest()[:8]
+    return os.path.join(d, f"farm_{farm_id}_{mode}_{key}.npz")
 
 
 def build_farm_cache(cfg: dict, farm_id: str, use_disk: bool = True) -> FarmCache:
@@ -90,6 +95,15 @@ def build_farm_cache(cfg: dict, farm_id: str, use_disk: bool = True) -> FarmCach
     train_raw_parts = []
     raw_items = []  # (id, is_normal, label, raw_pred_matrix, status, window_rel)
 
+    # In adapter mode we keep the full (wide) feature set, so cap the normal-train
+    # rows kept per file to bound memory (Farm C is 952 features x 58 files).
+    cap_per_file = None
+    if mode == "adapter":
+        train_cap = cfg["align"].get("adapter_max_train_rows")
+        if train_cap:
+            cap_per_file = max(1, int(train_cap) // max(1, len(csv_paths)))
+    rng = np.random.default_rng(cfg.get("seed", 0))
+
     for p in csv_paths:
         ev_id = os.path.splitext(os.path.basename(p))[0]
         df = pd.read_csv(p, sep=sep, usecols=usecols)
@@ -101,6 +115,8 @@ def build_farm_cache(cfg: dict, farm_id: str, use_disk: bool = True) -> FarmCach
         normal_mask = df["status_type_id"].isin(normal_ids)
 
         tr = df.loc[is_train & normal_mask, feat_cols].to_numpy(dtype=np.float64)
+        if cap_per_file and len(tr) > cap_per_file:
+            tr = tr[rng.choice(len(tr), cap_per_file, replace=False)]
         if len(tr):
             train_raw_parts.append(tr)
 
@@ -247,42 +263,59 @@ def run_sequence(cfg: dict, strategy, seed: int) -> dict:
         if caches[fid].input_dim != input_dim and cfg["align"]["mode"] == "shared_only":
             raise ValueError("shared_only requires identical input dims across farms")
 
-    model = build_model(input_dim, cfg).to(device)
+    mode = cfg["align"]["mode"]
+    if mode == "adapter":
+        # Shared core sees a fixed-width embedding; each farm gets its own
+        # input adapter (full_dim -> embed) and output head (embed -> full_dim).
+        shared_dim = cfg["align"].get("adapter_embed_dim", 32)
+        model = build_model(shared_dim, cfg)
+        for f in sequence:
+            model.add_farm_adapter(f, caches[f].input_dim)
+        model = model.to(device)
+        eval_fid = lambda f: f            # use the farm's adapter at train/eval
+    else:
+        model = build_model(input_dim, cfg).to(device)
+        eval_fid = lambda f: None         # shared-core path; no adapter
+
     optim = torch.optim.Adam(model.parameters(), lr=cfg["train"]["lr"],
                              weight_decay=cfg["train"]["weight_decay"])
 
     matrix: dict[str, dict[str, float]] = {}
     records = []
-
     cap = cfg["train"].get("max_train_rows_per_farm")
 
+    def _cap(X):
+        if cap and len(X) > cap:
+            return X[np.random.default_rng(seed).choice(len(X), cap, replace=False)]
+        return X
+
+    def _score_farm(stage, f):
+        thr = select_threshold(
+            reconstruction_errors(model, caches[f].train_X, device, eval_fid(f)), cfg)
+        res = evaluate_farm(model, caches[f], thr, cfg, device, eval_fid(f))
+        matrix.setdefault(stage, {})[f] = res["CARE"]
+        records.append(_record(cfg, strategy, seed, stage, f, res))
+
     if strategy.name == "joint":
-        pooled = np.concatenate([caches[f].train_X for f in sequence], axis=0)
-        if cap and len(pooled) > cap:
-            sel = np.random.default_rng(seed).choice(len(pooled), cap, replace=False)
-            pooled = pooled[sel]
-        strategy.train_on(sequence[-1], model, optim, pooled)
+        if mode == "adapter":
+            # Per-farm feature dims cannot be pooled into one matrix, so we make
+            # one training pass over each farm (a multi-task reference, not a
+            # strict pooled upper bound) before evaluating all farms.
+            for f in sequence:
+                strategy.train_on(f, model, optim, _cap(caches[f].train_X))
+        else:
+            pooled = np.concatenate([caches[f].train_X for f in sequence], axis=0)
+            strategy.train_on(sequence[-1], model, optim, _cap(pooled))
         for f in sequence:
-            thr = select_threshold(reconstruction_errors(model, caches[f].train_X, device), cfg)
-            res = evaluate_farm(model, caches[f], thr, cfg, device)
-            matrix.setdefault(sequence[-1], {})[f] = res["CARE"]
-            records.append(_record(cfg, strategy, seed, sequence[-1], f, res))
+            _score_farm(sequence[-1], f)
         return {"matrix": matrix, "records": records}
 
     for stage in sequence:
-        X = caches[stage].train_X
-        if cap and len(X) > cap:
-            X = X[np.random.default_rng(seed).choice(len(X), cap, replace=False)]
+        X = _cap(caches[stage].train_X)
         strategy.train_on(stage, model, optim, X)
         strategy.end_of_farm(stage, model, X)
-
-        seen = sequence[: sequence.index(stage) + 1]
-        matrix[stage] = {}
-        for f in seen:
-            thr = select_threshold(reconstruction_errors(model, caches[f].train_X, device), cfg)
-            res = evaluate_farm(model, caches[f], thr, cfg, device)
-            matrix[stage][f] = res["CARE"]
-            records.append(_record(cfg, strategy, seed, stage, f, res))
+        for f in sequence[: sequence.index(stage) + 1]:
+            _score_farm(stage, f)
 
     return {"matrix": matrix, "records": records}
 

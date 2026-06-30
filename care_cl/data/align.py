@@ -25,30 +25,36 @@ from sklearn.preprocessing import StandardScaler
 from .loader import FarmData, Subdataset
 
 # Canonical cross-farm signals (order is fixed and defines the shared input layout).
-SHARED_SIGNALS = ["active_power", "wind_speed", "reactive_power", "rotor_speed", "ambient_temp"]
+# gearbox_oil_temp added: present in all three farms and central to many of the
+# logged events (gearbox / bearing / hydraulic faults), so it lifts coverage.
+SHARED_SIGNALS = ["active_power", "wind_speed", "reactive_power", "rotor_speed",
+                  "ambient_temp", "gearbox_oil_temp"]
 
 # canonical signal -> per-farm data column (the 10-min average channel).
 FARM_SIGNAL_MAP: dict[str, dict[str, str]] = {
     "A": {
-        "active_power":   "power_30_avg",      # Grid power [kW]
-        "wind_speed":     "wind_speed_3_avg",  # Windspeed [m/s]
-        "reactive_power": "sensor_31_avg",     # Grid reactive power [kVAr]
-        "rotor_speed":    "sensor_52_avg",     # Rotor rpm
-        "ambient_temp":   "sensor_0_avg",      # Ambient temperature [C]
+        "active_power":     "power_30_avg",      # Grid power [kW]
+        "wind_speed":       "wind_speed_3_avg",  # Windspeed [m/s]
+        "reactive_power":   "sensor_31_avg",     # Grid reactive power [kVAr]
+        "rotor_speed":      "sensor_52_avg",     # Rotor rpm
+        "ambient_temp":     "sensor_0_avg",      # Ambient temperature [C]
+        "gearbox_oil_temp": "sensor_12_avg",     # Temperature oil in gearbox [C]
     },
     "B": {
-        "active_power":   "power_62_avg",         # Active power [kW]
-        "wind_speed":     "wind_speed_61_avg",    # Wind speed [m/s]
-        "reactive_power": "reactive_power_11_avg",# Reactive power [kvar]
-        "rotor_speed":    "sensor_25_avg",        # Rotor speed [rpm]
-        "ambient_temp":   "sensor_8_avg",         # Outside temperature [C]
+        "active_power":     "power_62_avg",          # Active power [kW]
+        "wind_speed":       "wind_speed_61_avg",     # Wind speed [m/s]
+        "reactive_power":   "reactive_power_11_avg", # Reactive power [kvar]
+        "rotor_speed":      "sensor_25_avg",         # Rotor speed [rpm]
+        "ambient_temp":     "sensor_8_avg",          # Outside temperature [C]
+        "gearbox_oil_temp": "sensor_39_avg",         # Gearbox oil tank temperature [C]
     },
     "C": {
-        "active_power":   "power_6_avg",            # Active power HV grid [kW]
-        "wind_speed":     "wind_speed_235_avg",     # Wind speed 1 [m/s]
-        "reactive_power": "reactive_power_122_avg", # Reactive power HV grid [kvar]
-        "rotor_speed":    "sensor_144_avg",         # Rotor speed 1 [1/min]
-        "ambient_temp":   "sensor_7_avg",           # Ambient temperature [C]
+        "active_power":     "power_6_avg",            # Active power HV grid [kW]
+        "wind_speed":       "wind_speed_235_avg",     # Wind speed 1 [m/s]
+        "reactive_power":   "reactive_power_122_avg", # Reactive power HV grid [kvar]
+        "rotor_speed":      "sensor_144_avg",         # Rotor speed 1 [1/min]
+        "ambient_temp":     "sensor_7_avg",           # Ambient temperature [C]
+        "gearbox_oil_temp": "sensor_186_avg",         # Gearbox oil temperature 1 [C]
     },
 }
 

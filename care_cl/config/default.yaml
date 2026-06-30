@@ -5,7 +5,7 @@ seed: 0
 
 data:
   # Absolute root of the CARE-to-Compare download (contains "Wind Farm A/B/C").
-  root: "D:/Datasets/Care"
+  root: "../Datasets/Care"
   sep: ";"
   # Status IDs considered normal operation (README: 0=Normal, 2=Idling).
   normal_status_ids: [0, 2]
@@ -13,8 +13,10 @@ data:
 align:
   mode: "shared_only"        # "shared_only" (default) | "adapter"
   # Canonical cross-farm signals; per-farm column mapping lives in data/align.py.
-  shared_signals: ["active_power", "wind_speed", "reactive_power", "rotor_speed", "ambient_temp"]
+  shared_signals: ["active_power", "wind_speed", "reactive_power", "rotor_speed", "ambient_temp", "gearbox_oil_temp"]
   window_len: 1              # single timestep by default
+  adapter_embed_dim: 32      # adapter mode: width of the per-farm input/output embedding
+  adapter_max_train_rows: 150000  # cap normal-train rows per farm when building adapter caches (memory)
 
 model:
   type: "ae"                 # "ae" | "transformer" (transformer is an optional ablation)
@@ -23,7 +25,7 @@ model:
   dropout: 0.0
 
 train:
-  epochs: 100
+  epochs: 50
   batch_size: 512
   lr: 0.001
   weight_decay: 0.0
@@ -33,8 +35,8 @@ train:
 cl:
   sequence: ["A", "B", "C"]
   strategy: "naive"          # naive|joint|ewc|replay|distill|replay_distill
-  lambda_ewc: 100.0
-  lambda_distill: 1.0
+  lambda_ewc: 5.0            # was 100 (over-stiffened the tiny core -> more forgetting)
+  lambda_distill: 0.5        # was 1.0 (teacher pull was suppressing anomaly contrast)
   buffer_per_farm: 2000
   replay_batch_frac: 0.5     # fraction of each batch drawn from replay buffer
 
